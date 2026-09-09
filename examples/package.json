@@ -1,0 +1,9 @@
+{
+  "name": "gate-kernel-examples",
+  "private": true,
+  "type": "module",
+  "description": "gate-kernel 을 실제 소비자처럼 설치해 쓰는 예제 프로젝트",
+  "devDependencies": {
+    "gate-kernel": "file:.."
+  }
+}
