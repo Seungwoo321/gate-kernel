@@ -1,0 +1,11 @@
+{
+  "name": "gate-kernel",
+  "owner": { "name": "Seungwoo321" },
+  "plugins": [
+    {
+      "name": "gate-kernel",
+      "source": "./plugin",
+      "description": "규칙을 넣으면 게이트가 된다 — LLM 게이트 저작·실행 프레임워크"
+    }
+  ]
+}
