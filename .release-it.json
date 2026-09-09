@@ -14,7 +14,7 @@
   "npm": {
     "publish": true,
     "access": "public",
-    "publishArgs": ["--provenance"],
+    "publishArgs": ["--provenance", "--access", "public"],
     "skipChecks": true
   },
   "plugins": {
