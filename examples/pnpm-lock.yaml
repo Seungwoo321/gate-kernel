@@ -1,0 +1,24 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    devDependencies:
+      gate-kernel:
+        specifier: file:..
+        version: file:..
+
+packages:
+
+  gate-kernel@file:..:
+    resolution: {directory: .., type: directory}
+    engines: {node: '>=20'}
+    hasBin: true
+
+snapshots:
+
+  gate-kernel@file:..: {}

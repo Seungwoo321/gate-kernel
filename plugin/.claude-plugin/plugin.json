@@ -1,0 +1,7 @@
+{
+  "name": "gate-kernel",
+  "description": "규칙을 넣으면 게이트가 된다 — LLM 게이트 저작·실행 프레임워크",
+  "version": "0.1.0",
+  "author": { "name": "Seungwoo321" },
+  "keywords": ["gate", "quality", "verification", "framework"]
+}

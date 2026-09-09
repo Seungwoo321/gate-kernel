@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.gate/
+.local/
+tmp/
+*.tsbuildinfo
+.DS_Store

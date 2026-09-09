@@ -1,0 +1,42 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 동시 실행 취소 — 같은 ref 에 밀려 들어온 오래된 실행은 결론이 아니라 소음이다.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # engines.node 가 >=20 이므로 하한과 현행 LTS 를 둘 다 지킨다.
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # typecheck + build + test. 하나라도 깨지면 여기서 멈춘다.
+      - run: pnpm run verify
+
+      # 게이트 프레임워크가 자기 예제 게이트의 red-first 자격 검사를 통과하지 못하면
+      # 그 프레임워크가 무엇을 보장하는지 아무도 확인할 수 없다.
+      - name: prove example gates
+        working-directory: examples
+        run: |
+          pnpm install --frozen-lockfile
+          node ../dist/cli.js prove
