@@ -1,0 +1,58 @@
+{
+  "name": "gate-kernel",
+  "version": "0.1.0",
+  "description": "LLM 게이트 저작 프레임워크 — 규칙을 넣으면 게이트가 된다",
+  "type": "module",
+  "license": "MIT",
+  "author": "Seungwoo321",
+  "homepage": "https://github.com/Seungwoo321/gate-kernel#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Seungwoo321/gate-kernel.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Seungwoo321/gate-kernel/issues"
+  },
+  "keywords": [
+    "gate",
+    "quality",
+    "verification",
+    "framework",
+    "llm",
+    "claude-code"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.33.4",
+  "bin": {
+    "gate": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "gate": "node dist/cli.js run",
+    "verify": "pnpm run typecheck && pnpm run build && pnpm run test",
+    "prepublishOnly": "pnpm run verify"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}
