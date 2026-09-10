@@ -1,6 +1,6 @@
 {
   "name": "gate-kernel",
-  "version": "0.2.0",
+  "version": "0.2.1-beta.0",
   "description": "LLM 게이트 저작 프레임워크 — 규칙을 넣으면 게이트가 된다",
   "type": "module",
   "license": "MIT",
