@@ -26,7 +26,7 @@
   },
   "packageManager": "pnpm@10.33.4",
   "bin": {
-    "gate": "./dist/cli.js"
+    "gate": "dist/cli.js"
   },
   "exports": {
     ".": {
@@ -49,10 +49,14 @@
     "test": "node --test test/*.test.mjs",
     "gate": "node dist/cli.js run",
     "verify": "pnpm run typecheck && pnpm run build && pnpm run test",
-    "prepublishOnly": "pnpm run verify"
+    "prepublishOnly": "pnpm run verify",
+    "release": "release-it",
+    "release:beta": "release-it --preRelease=beta"
   },
   "devDependencies": {
+    "@release-it/conventional-changelog": "^10.0.6",
     "@types/node": "^22.10.2",
+    "release-it": "^19.2.4",
     "typescript": "^5.7.2"
   }
 }
