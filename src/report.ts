@@ -6,6 +6,9 @@ import type { JudgeRequest } from './lanes/judge.ts';
 import { JUDGE_DIR } from './lanes/judge.ts';
 import { strings, type Lang, type Tally } from './strings.ts';
 import { axisOf } from './suite.ts';
+import { paint, type Paint } from './ansi.ts';
+import type { ProveResult } from './prove.ts';
+import type { GateState } from './types.ts';
 
 /**
  * 실행 결과를 **읽는 LLM 에게 하는 지시문**으로 렌더링한다.
@@ -22,7 +25,8 @@ import { axisOf } from './suite.ts';
 type Action =
   | { kind: 'fix'; rule: RuleSpec; verdict: Verdict }
   | { kind: 'ask'; rule: RuleSpec; req: JudgeRequest }
-  | { kind: 'repair'; rule: RuleSpec; verdict: Verdict };
+  | { kind: 'repair'; rule: RuleSpec; verdict: Verdict }
+  | { kind: 'prove'; rule: RuleSpec; verdict: Verdict };
 
 export interface RenderOptions {
   cwd: string;
@@ -42,9 +46,44 @@ export interface RenderOptions {
   unclassified?: string[];
   /** 이 심각도부터 통과를 막는다. 이 아래 결함은 할 일이 아니라 참고다. */
   failAt?: Severity;
+  /**
+   * ANSI 색을 칠할지. 기본 false — 렌더러는 색 없이 완전해야 하고, 색은 그 위에 얹는
+   * 표현이다. 판단은 `resolveColor` 가 하고 렌더러는 결과만 받는다.
+   */
+  color?: boolean;
 }
 
 const MARK = { pass: '✓', fail: '✗', blocked: '✗' } as const;
+
+/** 상태 기호. 색이 없어도 상태가 구별되는 것이 먼저고, 색은 그 위에 얹는다. */
+export const STATE_MARK: Readonly<Record<GateState, string>> = Object.freeze({
+  green: '✓',
+  red: '✗',
+  stale: '~',
+  unproven: '?',
+  skipped: '–',
+  broken: '!',
+});
+
+function tintState(p: Paint, state: GateState, text: string): string {
+  switch (state) {
+    case 'green':
+      return p.green(text);
+    case 'red':
+      return p.red(text);
+    case 'broken':
+      return p.red(text);
+    case 'stale':
+    case 'unproven':
+      return p.yellow(text);
+    case 'skipped':
+      return p.dim(text);
+  }
+}
+
+function tintOutcome(p: Paint, outcome: 'pass' | 'fail' | 'blocked', text: string): string {
+  return outcome === 'pass' ? p.green(text) : outcome === 'fail' ? p.red(text) : p.yellow(text);
+}
 const FINDINGS_SHOWN = 10;
 const CANDIDATES_SHOWN = 6;
 
@@ -71,8 +110,12 @@ function requestPath(o: RenderOptions, req: JudgeRequest): string {
 
 export function renderRun(result: RunResult, rules: RuleSpec[], o: RenderOptions): string {
   const s = strings(o.lang);
+  const p = paint(o.color === true);
   const byId = new Map(rules.map((r) => [r.id, r]));
   const rerunCmd = o.rerunCmd ?? 'gate run';
+  // 이 실행에서 `unproven` 이 통과를 막는가는 결과 자체가 말한다(`coverage.gaps`).
+  // 막으면 할 일이고, 안 막으면(requireProven 이 꺼진 경우) 참고다.
+  const unprovenBlocks = result.coverage.gaps.includes('unproven');
 
   const actions: Action[] = [];
   const unproven: Verdict[] = [];
@@ -108,7 +151,11 @@ export function renderRun(result: RunResult, rules: RuleSpec[], o: RenderOptions
       const rule = byId.get(v.rule);
       if (rule) actions.push({ kind: 'repair', rule, verdict: v });
     }
-    if (v.state === 'unproven') unproven.push(v);
+    if (v.state === 'unproven') {
+      const rule = byId.get(v.rule);
+      if (unprovenBlocks && rule) actions.push({ kind: 'prove', rule, verdict: v });
+      else unproven.push(v);
+    }
     if (v.state === 'skipped') skipped.push(v);
     if (v.expiredMasks?.length) expiredByRule.set(v.rule, v.expiredMasks);
   }
@@ -127,37 +174,51 @@ export function renderRun(result: RunResult, rules: RuleSpec[], o: RenderOptions
 
   const tally: Tally = {
     total: seen.size,
-    passed: result.verdicts.filter((v) => v.state === 'green').length,
+    passed: result.coverage.green,
     fix: actions.filter((a) => a.kind === 'fix').length,
     ask: actions.filter((a) => a.kind === 'ask').length,
     repair: actions.filter((a) => a.kind === 'repair').length,
+    unproven: result.coverage.unproven.length,
     skipped: skipped.length,
   };
 
   const lines: string[] = [];
+  const footer = (): string =>
+    result.outcome === 'pass'
+      ? p.green(s.footerPass())
+      : result.outcome === 'fail'
+        ? p.red(s.footerFail(tally.ask))
+        : p.yellow(s.footerBlocked());
 
-  if (tally.total === 0) {
-    lines.push(s.noRules('gate.config.mjs 와 gates/ 를 확인해라.'));
+  // 고른 게이트가 없다. 어떤 상태 목록도 만들 수 없으므로 판정만 말하고 끝낸다 —
+  // `allowEmpty` 로 허용됐으면 통과지만 검사한 것이 없다는 사실은 그대로 적는다.
+  if (result.coverage.selected === 0) {
+    const gap = result.coverage.gaps.includes('empty-selection');
+    lines.push(gap ? p.yellow(s.noRules('gate.config.mjs 와 gates/ 를 확인해라.')) : p.yellow(s.noRulesAllowed()));
+    if (o.suite) lines.push(s.suiteLine(o.suite));
+    lines.push('', footer());
     return `${lines.join('\n')}\n`;
   }
 
-  lines.push(s.header(result.outcome, MARK[result.outcome], tally));
+  lines.push(tintOutcome(p, result.outcome, s.header(result.outcome, MARK[result.outcome], tally)));
   if (o.suite) lines.push(s.suiteLine(o.suite));
   lines.push('');
 
-  if (o.unclassified?.length) lines.push(s.warnUnclassified(o.unclassified), '');
-  if (o.inlineJudge) lines.push(s.warnInlineJudge(), '');
-  if (o.projectContext) lines.push(s.warnProjectContext(), '');
+  if (o.unclassified?.length) lines.push(p.yellow(s.warnUnclassified(o.unclassified)), '');
+  if (o.inlineJudge) lines.push(p.yellow(s.warnInlineJudge()), '');
+  if (o.projectContext) lines.push(p.yellow(s.warnProjectContext()), '');
+  if (!unprovenBlocks && result.coverage.unproven.length) lines.push(p.yellow(s.warnRequireProvenOff()), '');
+  if (result.coverage.executed === 0 && skipped.length) lines.push(p.yellow(s.noteNothingExecuted()), '');
 
   if (actions.length === 0) {
     lines.push(s.nothingToDo());
   } else {
-    lines.push(rule80(s.todoHeading()));
-    lines.push(...todoIndex(actions, s));
+    lines.push(p.bold(rule80(s.todoHeading())));
+    lines.push(...todoIndex(actions, s, p));
     lines.push(`[${actions.length + 1}] ${s.rerun(rerunCmd)}`);
     lines.push('━'.repeat(76), '');
     actions.forEach((a, i) => {
-      lines.push(...detail(i + 1, a, s, o));
+      lines.push(...detail(i + 1, a, s, o, p));
       lines.push('');
     });
   }
@@ -165,12 +226,12 @@ export function renderRun(result: RunResult, rules: RuleSpec[], o: RenderOptions
   // 안 돈 게이트는 통과 옆이 아니라 자기 제목 아래에 선다. 초록 사이에 섞이면
   // 커버리지 숫자가 조용히 거짓말을 시작한다.
   if (skipped.length) {
-    lines.push('', `── ${s.skippedHeading()} ──`);
-    for (const v of skipped) lines.push(s.skippedBlock(v.rule, v.reason ?? '?'), '');
+    lines.push('', p.dim(`── ${s.skippedHeading()} ──`));
+    for (const v of skipped) lines.push(p.dim(s.skippedBlock(v.rule, v.reason ?? '?')), '');
   }
 
   if (advisory.length || expired.length || unproven.length) {
-    lines.push('', `── ${s.advisoryHeading()} ──`);
+    lines.push('', p.yellow(`── ${s.advisoryHeading()} ──`));
     for (const a of advisory) {
       const items = a.findings
         .slice(0, FINDINGS_SHOWN)
@@ -186,18 +247,72 @@ export function renderRun(result: RunResult, rules: RuleSpec[], o: RenderOptions
 
   if (o.verbose) {
     const green = result.verdicts.filter((v) => v.state === 'green');
-    for (const v of green) lines.push(`✓ ${v.rule}${v.cacheHit ? ' (cached)' : ''}`);
+    for (const v of green) lines.push(`${p.green('✓')} ${v.rule}${v.cacheHit ? p.dim(' (cached)') : ''}`);
     if (green.length) lines.push('');
   }
 
-  lines.push(
-    result.outcome === 'pass'
-      ? s.footerPass()
-      : result.outcome === 'fail'
-        ? s.footerFail(tally.ask)
-        : s.footerBlocked(),
-  );
+  lines.push(footer());
   return `${lines.join('\n')}\n`;
+}
+
+// ---------------------------------------------------------------------------
+// prove / status / list — run 과 같은 렌더 계층에 둔다. CLI 가 각자 즉석에서
+// 찍으면 호스트는 같은 표를 다시 짜야 하고, 그 순간 상태 기호·색·문구가 둘이 된다.
+// ---------------------------------------------------------------------------
+
+export interface RenderPlainOptions {
+  color?: boolean;
+  lang?: Lang;
+}
+
+export function renderProve(results: ProveResult[], o: RenderPlainOptions = {}): string {
+  const p = paint(o.color === true);
+  const lines: string[] = [];
+  for (const r of results) {
+    const mark = r.ok ? p.green('✓') : p.red('✗');
+    const note = r.demonstratesRed ? '' : p.yellow(o.lang === 'en' ? '  (no red demonstrated — unproven)' : '  (red 미시연 — unproven)');
+    lines.push(`${mark} ${r.rule}${note}`);
+    for (const c of r.cases) {
+      if (!c.ok) {
+        const msg =
+          o.lang === 'en'
+            ? `expected ${c.expect}, got ${c.got}`
+            : `${c.expect} 기대, ${c.got} 나옴`;
+        lines.push(`    ${p.red('✗')} ${c.name}: ${msg} ${c.detail ?? ''}`.trimEnd());
+      }
+    }
+  }
+  return lines.length ? `${lines.join('\n')}\n` : '';
+}
+
+export interface StatusRow {
+  id: string;
+  lane: 'deterministic' | 'hybrid';
+  state: GateState;
+  provenRed: boolean;
+  findings: number;
+  criterion: string;
+}
+
+export function renderStatus(rows: StatusRow[], o: RenderPlainOptions = {}): string {
+  const p = paint(o.color === true);
+  const lines = rows.map((r) => {
+    const mark = tintState(p, r.state, STATE_MARK[r.state]);
+    const state = tintState(p, r.state, r.state.padEnd(9));
+    const count = r.findings ? p.dim(`  (${r.findings})`) : '';
+    return `${mark} ${state} ${r.id}${count}`;
+  });
+  return lines.length ? `${lines.join('\n')}\n` : '';
+}
+
+export function renderList(rules: RuleSpec[], o: RenderPlainOptions = {}): string {
+  const p = paint(o.color === true);
+  const lines: string[] = [];
+  for (const r of rules) {
+    const lane = r.lane === 'hybrid' ? p.cyan('◑') : p.green('●');
+    lines.push(`${lane} ${p.bold(r.id)}`, `    ${r.criterion}`, `    ${p.dim(r.source ?? '')}`);
+  }
+  return lines.length ? `${lines.join('\n')}\n` : '';
 }
 
 function rule80(title: string): string {
@@ -221,31 +336,45 @@ function groupByAxis(actions: Action[]): Map<string, Action[]> {
   return axes;
 }
 
-function todoIndex(actions: Action[], s: ReturnType<typeof strings>): string[] {
+function todoIndex(actions: Action[], s: ReturnType<typeof strings>, p: Paint): string[] {
   const axes = groupByAxis(actions);
   let n = 0;
-  if (axes.size < 2) return actions.map((a) => indexLine(++n, a, s));
+  if (axes.size < 2) return actions.map((a) => indexLine(++n, a, s, p));
 
   const lines: string[] = [];
   for (const [axis, group] of axes) {
-    lines.push(axis ? s.axisHeading(axis) : s.unclassifiedAxis());
-    for (const a of group) lines.push(`  ${indexLine(++n, a, s)}`);
+    lines.push(p.bold(axis ? s.axisHeading(axis) : s.unclassifiedAxis()));
+    for (const a of group) lines.push(`  ${indexLine(++n, a, s, p)}`);
   }
   return lines;
 }
 
-function indexLine(n: number, a: Action, s: ReturnType<typeof strings>): string {
+function verbOf(a: Action, s: ReturnType<typeof strings>, p: Paint): string {
+  switch (a.kind) {
+    case 'fix':
+      return p.red(s.verbFix());
+    case 'ask':
+      return p.cyan(s.verbAsk());
+    case 'repair':
+      return p.red(s.verbRepair());
+    case 'prove':
+      return p.yellow(s.verbProve());
+  }
+}
+
+function indexLine(n: number, a: Action, s: ReturnType<typeof strings>, p: Paint): string {
   const idx = `[${n}]`;
+  const verb = verbOf(a, s, p);
   if (a.kind === 'fix') {
     const first = a.verdict.findings[0];
     const where = first ? loc(first) : '';
     const more = a.verdict.findings.length > 1 ? ` (+${a.verdict.findings.length - 1})` : '';
-    return `${idx} ${s.verbFix()}   ${a.rule.id}   ${where}${more}`;
+    return `${idx} ${verb}   ${a.rule.id}   ${where}${more}`;
   }
   if (a.kind === 'ask') {
-    return `${idx} ${s.verbAsk()}   ${a.rule.id}   ${s.askSelfJudgeWarning()}`;
+    return `${idx} ${verb}   ${a.rule.id}   ${s.askSelfJudgeWarning()}`;
   }
-  return `${idx} ${s.verbRepair()}   ${a.rule.id}`;
+  return `${idx} ${verb}   ${a.rule.id}`;
 }
 
 function detail(
@@ -253,8 +382,9 @@ function detail(
   a: Action,
   s: ReturnType<typeof strings>,
   o: RenderOptions,
+  p: Paint,
 ): string[] {
-  const head = `[${n}] ${a.kind === 'fix' ? s.verbFix() : a.kind === 'ask' ? s.verbAsk() : s.verbRepair()} — ${a.rule.id}`;
+  const head = `[${n}] ${verbOf(a, s, p)} — ${p.bold(a.rule.id)}`;
   const out = [head, `  ${s.labelCriterion()}   ${a.rule.criterion}`];
 
   if (a.kind === 'fix') {
@@ -271,6 +401,11 @@ function detail(
 
   if (a.kind === 'repair') {
     out.push(s.brokenBlock(a.verdict.reason ?? '?'));
+    return out;
+  }
+
+  if (a.kind === 'prove') {
+    out.push(s.proveBlock());
     return out;
   }
 

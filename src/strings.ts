@@ -15,6 +15,8 @@ export interface Tally {
   fix: number;
   ask: number;
   repair: number;
+  /** red 를 시연한 적 없어 증거가 못 되는 게이트. 통과와 분리해서 센다. */
+  unproven: number;
   /** 적용 대상이 아니어서 안 돈 게이트. 통과와 **분리해서** 센다. */
   skipped: number;
 }
@@ -31,6 +33,8 @@ export interface Strings {
   /** 헤더 한 줄. `gate ✗ blocked — 12개 중 9 통과 · 2 위반 · 1 판정 대기` */
   header(outcome: string, mark: string, t: Tally): string;
   noRules(configHint: string): string;
+  /** 빈 선택이 `allowEmpty` 로 허용됐다. 통과지만 검사한 것은 없다고 말한다. */
+  noRulesAllowed(): string;
   nothingToDo(): string;
 
   todoHeading(): string;
@@ -43,6 +47,8 @@ export interface Strings {
   verbFix(): string;
   verbAsk(): string;
   verbRepair(): string;
+  /** red 시연이 없어 막힌 게이트에 대한 동사. */
+  verbProve(): string;
   askSelfJudgeWarning(): string;
   rerun(cmd: string): string;
 
@@ -57,6 +63,8 @@ export interface Strings {
   /** 판정 블록의 본문 — 이 프레임워크에서 가장 무거운 지시문이다. */
   judgeBlock(a: JudgeBlockArgs): string;
   brokenBlock(reason: string): string;
+  /** 통과를 막는 `unproven`. 할 일 목록의 상세 블록이다. */
+  proveBlock(): string;
 
   advisoryHeading(): string;
   unprovenBlock(rule: string, criterion: string): string;
@@ -75,6 +83,10 @@ export interface Strings {
 
   warnProjectContext(): string;
   warnInlineJudge(): string;
+  /** `coverage.requireProven` 이 꺼져 있다 — unproven 이 통과로 접힌다. */
+  warnRequireProvenOff(): string;
+  /** 게이트는 있는데 전부 skipped 라 실제로 판정한 것이 없다. */
+  noteNothingExecuted(): string;
 }
 
 const ko: Strings = {
@@ -83,10 +95,14 @@ const ko: Strings = {
     if (t.fix) parts.push(`${t.fix}개 위반`);
     if (t.ask) parts.push(`${t.ask}개 판정 대기`);
     if (t.repair) parts.push(`${t.repair}개 게이트 고장`);
+    if (t.unproven) parts.push(`${t.unproven}개 미증명`);
     if (t.skipped) parts.push(`${t.skipped}개 미적용`);
     return `gate ${mark} ${outcome} — ${t.total}개 중 ${parts.join(' · ')}`;
   },
-  noRules: (hint) => `gate — 게이트가 없다. ${hint}`,
+  noRules: (hint) =>
+    `gate — 고른 게이트가 0개다. 아무것도 검사하지 않은 실행은 통과가 아니다. ${hint}\n` +
+    '  의도적으로 빈 스위트라면 gate.config 의 `coverage.allowEmpty: true` 로 명시해라.',
+  noRulesAllowed: () => 'gate — 고른 게이트가 0개다(allowEmpty). 통과로 치지만 검사한 것은 없다.',
   nothingToDo: () => '할 일 없다. 계속 진행해라.',
 
   todoHeading: () => '지금 할 일',
@@ -99,6 +115,7 @@ const ko: Strings = {
   verbFix: () => '고쳐라',
   verbAsk: () => '물어라',
   verbRepair: () => '게이트를 고쳐라',
+  verbProve: () => 'red 를 시연해라',
   askSelfJudgeWarning: () => '← 직접 판정하지 마라',
   rerun: (cmd) =>
     `다 끝냈으면 \`${cmd}\` 을 다시 돌려라.\n` +
@@ -144,6 +161,12 @@ const ko: Strings = {
       '  검사 대상이 아니라 게이트 코드의 문제다. 게이트를 고쳐라.',
       '  못 고치겠으면 지워라. 깨진 채로 두면 통과처럼 보인다.',
     ].join('\n'),
+  proveBlock: () =>
+    [
+      '  이 게이트는 결함 0 건이지만 red 를 한 번도 낸 적이 없다.',
+      '  실패를 보여준 적 없는 게이트의 초록은 증거가 아니다 — 아무것도 안 하는 게이트와 구별되지 않는다.',
+      '  `prove` 에 위반 픽스처를 하나 넣고 `gate prove --rule <id>` 를 돌려라. 통과하면 이 게이트는 green 이 된다.',
+    ].join('\n'),
 
   advisoryHeading: () => '통과를 막지는 않지만 알아 둬라',
   unprovenBlock: (rule, criterion) =>
@@ -172,7 +195,7 @@ const ko: Strings = {
       '  적용 대상이 아니라 건너뛰었다. **통과가 아니라 미적용이다.**',
     ].join('\n'),
 
-  footerBlocked: () => 'outcome: blocked — 판정이 남아 아직 결론이 아니다.',
+  footerBlocked: () => 'outcome: blocked — 아직 결론이 아니다. 위 할 일을 끝내고 다시 돌려라.',
   footerFail: (pending) =>
     pending > 0
       ? `outcome: fail — 위반이 있다. 판정도 ${pending}건 남았다. 둘 다 끝내라.`
@@ -185,6 +208,11 @@ const ko: Strings = {
   warnInlineJudge: () =>
     '⚠ judge.delegate 가 inline 이다 — 산출자가 자기 산출을 판정한다.\n' +
     '  같은 맹점이 검증을 통과할 수 있다.',
+  warnRequireProvenOff: () =>
+    '⚠ coverage.requireProven 이 꺼져 있다 — red 를 시연한 적 없는 게이트가 통과로 접힌다.\n' +
+    '  결함 0 건과 검사 안 함이 구별되지 않는다. 픽스처를 붙이고 다시 켜라.',
+  noteNothingExecuted: () =>
+    '⚠ 고른 게이트가 전부 미적용이라 실제로 판정한 것이 없다. 통과로 치지만 검사한 것은 없다.',
 };
 
 const en: Strings = {
@@ -193,10 +221,14 @@ const en: Strings = {
     if (t.fix) parts.push(`${t.fix} violating`);
     if (t.ask) parts.push(`${t.ask} awaiting judgment`);
     if (t.repair) parts.push(`${t.repair} broken`);
+    if (t.unproven) parts.push(`${t.unproven} unproven`);
     if (t.skipped) parts.push(`${t.skipped} not applicable`);
     return `gate ${mark} ${outcome} — ${parts.join(' · ')} of ${t.total}`;
   },
-  noRules: (hint) => `gate — no gates found. ${hint}`,
+  noRules: (hint) =>
+    `gate — 0 gates selected. A run that inspected nothing is not a pass. ${hint}\n` +
+    '  If the empty suite is intentional, say so with `coverage.allowEmpty: true` in gate.config.',
+  noRulesAllowed: () => 'gate — 0 gates selected (allowEmpty). Counted as a pass, but nothing was inspected.',
   nothingToDo: () => 'Nothing to do. Carry on.',
 
   todoHeading: () => 'Do this now',
@@ -209,6 +241,7 @@ const en: Strings = {
   verbFix: () => 'Fix',
   verbAsk: () => 'Ask',
   verbRepair: () => 'Repair the gate',
+  verbProve: () => 'Demonstrate red',
   askSelfJudgeWarning: () => '← do not judge this yourself',
   rerun: (cmd) =>
     `When all of the above is done, run \`${cmd}\` again.\n` +
@@ -254,6 +287,12 @@ const en: Strings = {
       '  That is a bug in the gate, not in what it inspects. Repair it.',
       '  If you cannot, delete it. A broken gate reads as a passing one.',
     ].join('\n'),
+  proveBlock: () =>
+    [
+      '  This gate found nothing, but it has never produced red.',
+      '  A gate that has never failed has not earned its green — it is indistinguishable from a gate that does nothing.',
+      '  Add one violating fixture to `prove` and run `gate prove --rule <id>`. Once it passes, this gate turns green.',
+    ].join('\n'),
 
   advisoryHeading: () => 'Not blocking, but know this',
   unprovenBlock: (rule, criterion) =>
@@ -282,7 +321,7 @@ const en: Strings = {
       '  Not applicable to this subject, so it was skipped. **That is not a pass.**',
     ].join('\n'),
 
-  footerBlocked: () => 'outcome: blocked — judgment is outstanding, this is not a conclusion.',
+  footerBlocked: () => 'outcome: blocked — not a conclusion yet. Finish the items above and run again.',
   footerFail: (pending) =>
     pending > 0
       ? `outcome: fail — there are violations, and ${pending} judgment(s) outstanding. Finish both.`
@@ -295,6 +334,11 @@ const en: Strings = {
   warnInlineJudge: () =>
     '⚠ judge.delegate is inline — the producer is validating its own output.\n' +
     '  The same blind spot can pass review.',
+  warnRequireProvenOff: () =>
+    '⚠ coverage.requireProven is off — gates that never demonstrated red are folded into pass.\n' +
+    '  Zero findings and no inspection are no longer distinguishable. Add fixtures and turn it back on.',
+  noteNothingExecuted: () =>
+    '⚠ Every selected gate was not applicable, so nothing was actually judged. Counted as a pass, but nothing was inspected.',
 };
 
 const TABLE: Record<Lang, Strings> = { ko, en };

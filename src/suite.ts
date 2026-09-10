@@ -17,6 +17,8 @@ export interface ResolvedSuite {
   name: string;
   include: string[];
   exclude: string[];
+  /** 이 스위트가 선택돼 있기를 요구하는 룰 id. `extends` 를 따라 합집합이다. */
+  required: string[];
   config: ResolvedConfig;
 }
 
@@ -27,20 +29,24 @@ function flatten(
   suites: Record<string, SuiteDef>,
   name: string,
   seen: Set<string>,
-): { include: string[]; exclude: string[]; overrides: GateConfig } {
-  if (seen.has(name)) return { include: [], exclude: [], overrides: {} };
+): { include: string[]; exclude: string[]; required: string[]; overrides: GateConfig } {
+  if (seen.has(name)) return { include: [], exclude: [], required: [], overrides: {} };
   seen.add(name);
   const def = suites[name];
   if (!def) throw new Error(`알 수 없는 스위트: ${name} — gate.config 의 suites 에 없다.`);
 
   const include = [...(def.include ?? [])];
   const exclude = [...(def.exclude ?? [])];
+  // 스위트의 `required` 는 선택에 대한 요구라, 레지스트리에 대한 요구인
+  // `config.required` 와 섞이지 않게 overrides 밖에서 따로 모은다.
+  const required = [...(def.required ?? [])];
   let overrides: GateConfig = {};
 
   for (const parent of def.extends ?? []) {
     const p = flatten(suites, parent, seen);
     include.push(...p.include);
     exclude.push(...p.exclude);
+    required.push(...p.required);
     overrides = mergeConfig(overrides, p.overrides);
   }
 
@@ -48,7 +54,8 @@ function flatten(
   if (def.failAt) own.failAt = def.failAt;
   if (def.judge) own.judge = def.judge;
   if (def.output) own.output = def.output;
-  return { include, exclude, overrides: mergeConfig(overrides, own) };
+  if (def.coverage) own.coverage = def.coverage;
+  return { include, exclude, required: [...new Set(required)], overrides: mergeConfig(overrides, own) };
 }
 
 /**
@@ -58,13 +65,14 @@ function flatten(
  */
 export function resolveSuite(config: ResolvedConfig, name?: string): ResolvedSuite {
   const picked = name ?? config.defaultSuite;
-  if (!picked) return { name: ALL_SUITE, include: ['**'], exclude: [], config };
+  if (!picked) return { name: ALL_SUITE, include: ['**'], exclude: [], required: [], config };
 
-  const { include, exclude, overrides } = flatten(config.suites ?? {}, picked, new Set());
+  const { include, exclude, required, overrides } = flatten(config.suites ?? {}, picked, new Set());
   return {
     name: picked,
     include: include.length ? include : ['**'],
     exclude,
+    required,
     config: mergeConfig(config, overrides) as ResolvedConfig,
   };
 }
@@ -73,6 +81,12 @@ export interface Selection {
   targets: RuleSpec[];
   /** 태그가 없어 분류되지 않은 게이트. 스위트와 무관하게 항상 돌지만 매 실행 경고한다. */
   unclassified: RuleSpec[];
+  /**
+   * 스위트가 `required` 로 요구했는데 선택에 없는 룰 id. 비어 있지 않으면 이 선택으로
+   * 실행해서는 안 된다 — 러너와 CLI 가 실행 전에 거부한다. `only` 로 좁힌 선택에는
+   * 적용하지 않는다(`--rule` 은 의도된 부분 실행이다).
+   */
+  missing: string[];
 }
 
 /**
@@ -101,7 +115,9 @@ export function selectRules(rules: RuleSpec[], suite: ResolvedSuite, only?: stri
       targets.push(r);
     }
   }
-  return { targets, unclassified };
+  const picked = new Set(targets.map((r) => r.id));
+  const missing = only?.length ? [] : suite.required.filter((id) => !picked.has(id));
+  return { targets, unclassified, missing };
 }
 
 /**

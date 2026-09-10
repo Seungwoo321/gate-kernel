@@ -481,7 +481,10 @@ test('적용 대상이 아니면 통과가 아니라 미적용이다', async () 
   assert.equal(v.state, 'skipped')
   assert.equal(v.reason, '이번 변경에 .sql 이 없다')
   assert.equal(out.verdicts.filter((x) => x.state === 'green').length, 0)
+  // 사유를 댄 미적용은 갭이 아니다 — 대신 실행 수가 0 이라는 사실이 커버리지에 남는다.
   assert.equal(out.outcome, 'pass')
+  assert.equal(out.coverage.executed, 0)
+  assert.deepEqual(out.coverage.skipped, ['mig'])
 })
 
 test('사유 없는 건너뛰기는 broken 이다', async () => {

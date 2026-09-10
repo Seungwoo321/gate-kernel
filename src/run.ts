@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { Finding, MaskSpec, RunOutcome, RuleSpec, Severity, Slice, Verdict } from './types.ts';
+import type { Coverage, CoverageGap, Finding, MaskSpec, RunOutcome, RuleSpec, Severity, Slice, Verdict } from './types.ts';
 import { SEVERITY_RANK } from './types.ts';
 import { DEFAULT_CONFIG, resolveConfig, type GateConfig } from './config.ts';
 import { resolveSubject } from './subjects/resolve.ts';
@@ -247,7 +247,15 @@ export async function run(opts: RunOptions): Promise<RunResult> {
     verdicts.push(v);
   }
 
-  return { ...aggregate(verdicts, cfg.failAt, unjudged, startedAt), pending, expired };
+  return {
+    ...aggregate(verdicts, cfg.failAt, unjudged, startedAt, {
+      selected: targets.length,
+      allowEmpty: cfg.coverage.allowEmpty,
+      requireProven: cfg.coverage.requireProven,
+    }),
+    pending,
+    expired,
+  };
 }
 
 function marker(
@@ -281,11 +289,25 @@ function skipped(spec: RuleSpec, reason: string, t0: number, slice?: Slice): Ver
   return marker(spec, 'skipped', reason, t0, slice);
 }
 
+/**
+ * 집계가 판정 목록 밖에서 알아야 하는 것. 판정만 보면 "0 개를 골랐다" 와 "골랐는데
+ * 판정이 없다" 가 같은 빈 배열이라, 무엇을 돌리기로 했는지는 따로 받아야 한다.
+ */
+export interface CoverageInput {
+  /** 이번 실행에 고른 룰 수. */
+  selected: number;
+  /** 빈 선택을 통과로 친다. 기본 false. */
+  allowEmpty?: boolean;
+  /** `unproven` 이 통과를 막는다. 기본 true. */
+  requireProven?: boolean;
+}
+
 export function aggregate(
   verdicts: Verdict[],
   failAt: Severity,
   unjudged: string[],
   startedAt: string,
+  cov?: CoverageInput,
 ): RunOutcome {
   const counts = EMPTY_COUNTS();
   // `broken` 과 `skipped` 는 집계에서 제외한다 — 판정 못 했거나 안 돈 것을 0 건으로
@@ -297,15 +319,47 @@ export function aggregate(
   const failing = (Object.keys(counts) as Severity[]).some(
     (s) => SEVERITY_RANK[s] >= SEVERITY_RANK[failAt] && counts[s] > 0,
   );
-  // 미판정·broken 이 하나라도 있으면 통과가 아니다. 판정 불가는 통과가 아니다.
-  const blocked = unjudged.length > 0 || verdicts.some((v) => v.state === 'broken' || v.state === 'stale');
+
+  const coverage = coverageOf(verdicts, cov ?? { selected: verdicts.length });
+
+  // 미판정·broken·stale 이 하나라도 있으면 통과가 아니다. 판정 불가는 통과가 아니다.
+  // 커버리지 갭도 같은 자리다 — `unproven` 은 "결함 0 건" 이 아니라 "아직 모름" 이고,
+  // 빈 선택은 아무것도 검사하지 않은 것이다. 둘을 통과로 접으면 exit 0 을 읽는
+  // 오케스트레이터가 검증된 초록과 구별할 수 없다.
+  const blocked =
+    unjudged.length > 0 ||
+    verdicts.some((v) => v.state === 'broken' || v.state === 'stale') ||
+    coverage.gaps.length > 0;
   return {
     verdicts,
     outcome: failing ? 'fail' : blocked ? 'blocked' : 'pass',
     counts,
     unjudged,
+    coverage,
     startedAt,
     finishedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * `skipped` 는 실행 수에서 빠지되 갭이 아니다. 사유를 대고 비켜선 게이트는 "이번엔
+ * 적용 대상이 아니다" 를 스스로 선언한 것이고, 그 선언을 막으면 늘 걸리는 게이트를
+ * 만들어 결국 꺼지게 한다. 전부 skipped 인 실행은 `executed: 0` 으로 드러난다 —
+ * 통과로 세지 않고, 읽는 쪽이 판단할 수 있게 숫자로 남긴다.
+ */
+function coverageOf(verdicts: Verdict[], cov: CoverageInput): Coverage {
+  const unproven = verdicts.filter((v) => v.state === 'unproven').map((v) => v.rule);
+  const skipped = verdicts.filter((v) => v.state === 'skipped').map((v) => v.rule);
+  const gaps: CoverageGap[] = [];
+  if (cov.selected === 0 && !(cov.allowEmpty ?? false)) gaps.push('empty-selection');
+  if (unproven.length > 0 && (cov.requireProven ?? true)) gaps.push('unproven');
+  return {
+    selected: cov.selected,
+    executed: verdicts.length - skipped.length,
+    green: verdicts.filter((v) => v.state === 'green').length,
+    unproven,
+    skipped,
+    gaps,
   };
 }
 

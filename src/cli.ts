@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadConfig, loadRules } from './registry.ts';
+import { loadConfig, loadRules, RuleRegistryError } from './registry.ts';
 import { run, storeDirOf } from './run.ts';
 import { prove } from './prove.ts';
+import { resolveColor } from './ansi.ts';
+import type { ColorMode } from './config.ts';
 import {
   allRequests,
   ingest,
@@ -21,7 +23,7 @@ import {
   saveMaskFile,
   type MaskFile,
 } from './masks.ts';
-import { renderRun } from './report.ts';
+import { renderList, renderProve, renderRun, renderStatus, type StatusRow } from './report.ts';
 import type { Lang } from './strings.ts';
 import * as verdicts from './store/verdicts.ts';
 import { resolveSuite, selectRules, ALL_SUITE } from './suite.ts';
@@ -42,19 +44,35 @@ const flag = (name: string): string | undefined => {
 };
 const has = (name: string): boolean => argv.includes(`--${name}`);
 const cwd = flag('cwd') ?? process.cwd();
-const json = has('json');
+
+const FORMATS = new Set(['json', 'instruct', 'pretty']);
+const COLOR_MODES = new Set(['auto', 'always', 'never']);
+
+/**
+ * 출력 형식·색은 세 층에서 온다: 플래그 > 설정 > 기본. `--json` 은 `--format json` 의
+ * 축약이다. `pretty` 는 `instruct` 에 색을 강제한 것이라 별도 렌더러가 아니다 —
+ * 사람용 진실을 둘로 만들지 않는다. JSON 은 어떤 색 설정에서도 색을 담지 않는다.
+ */
+function outputMode(cfg: { format?: string; color?: ColorMode } | undefined): { json: boolean; color: boolean } {
+  const fmtFlag = flag('format');
+  if (fmtFlag != null && !FORMATS.has(fmtFlag)) throw new UsageError(`--format 은 json|instruct|pretty 중 하나다: ${fmtFlag}`);
+  const colorFlag = flag('color');
+  if (colorFlag != null && !COLOR_MODES.has(colorFlag)) throw new UsageError(`--color 는 auto|always|never 중 하나다: ${colorFlag}`);
+  const format = has('json') ? 'json' : (fmtFlag ?? cfg?.format ?? 'instruct');
+  const color = resolveColor({
+    flag: (colorFlag as ColorMode | undefined) ?? (format === 'pretty' ? 'always' : undefined),
+    config: cfg?.color,
+    noColor: process.env['NO_COLOR'],
+    isTTY: process.stdout.isTTY === true,
+  });
+  return { json: format === 'json', color: format !== 'json' && color };
+}
+
+class UsageError extends Error {}
 
 function out(v: unknown): void {
   process.stdout.write(`${JSON.stringify(v, null, 2)}\n`);
 }
-
-const STATE_MARK: Record<string, string> = {
-  green: '✓',
-  red: '✗',
-  stale: '~',
-  unproven: '?',
-  broken: '!',
-};
 
 /**
  * 판정자가 남긴 파일을 응답 계약으로 정규화한다.
@@ -109,8 +127,8 @@ async function main(): Promise<number> {
         '  gate list                   등록된 룰과 레인을 보여준다',
         '  gate prove [--rule <id>]    red-first 픽스처를 돌린다(등록 자격 검사)',
         '  gate run [<suite>] [--rule <id>] [--fresh] [--verbose] [--lang ko|en]',
-        '  gate suites                 정의된 스위트와 그 소속 게이트를 보여준다',
         '                              결정적 레인을 돌리고, 할 일을 지시문으로 낸다',
+        '  gate suites                 정의된 스위트와 그 소속 게이트를 보여준다',
         '  gate judge <rule> --verdict <파일>',
         '                              판정자가 쓴 답을 받아 커버리지를 검사하고 기록한다',
         '  gate mask <rule> <code> --reason "<왜 위반이 아닌가>" [--until YYYY-MM-DD]',
@@ -118,7 +136,15 @@ async function main(): Promise<number> {
         '  gate pending                판정 대기 중인 요청을 출력한다(호스트가 읽는다)',
         '  gate status                 게이트별 상태(unproven|red|green|stale|skipped|broken)',
         '',
-        '종료 코드: 0 통과 · 1 실패 · 2 사용법 · 3 차단(미판정/broken/stale) · 20 판정 필요',
+        '공통 옵션',
+        '  --json                      기계용 JSON (= --format json). 색을 담지 않는다',
+        '  --format json|instruct|pretty',
+        '                              instruct = LLM 지시문(기본) · pretty = instruct + 색 강제',
+        '  --color auto|always|never   auto = TTY 이고 NO_COLOR 가 없을 때만 (기본)',
+        '  --cwd <dir>',
+        '',
+        '종료 코드: 0 통과 · 1 실패 · 2 사용법 · 3 차단 · 20 판정 필요',
+        '  3 = 미판정 · broken · stale · unproven(red 미시연) · 고른 게이트 0개 · 선언된 룰 누락',
         '',
       ].join('\n'),
     );
@@ -150,7 +176,16 @@ async function main(): Promise<number> {
   }
 
   const config = await loadConfig(cwd);
-  const rules = await loadRules(cwd, config);
+  let rules: RuleSpec[];
+  try {
+    rules = await loadRules(cwd, config);
+  } catch (e) {
+    if (!(e instanceof RuleRegistryError)) throw e;
+    // 선언된 룰이 없으면 어떤 명령도 그 레지스트리 위에서 돌지 않는다. 남은 룰로
+    // 통과를 내는 순간 "적어 둔 게이트가 사라졌다" 는 사실이 exit 0 뒤로 숨는다.
+    process.stderr.write(`${e.message}\n`);
+    return EXIT.BLOCKED;
+  }
   const only = flag('rule') ? [flag('rule')!] : undefined;
   // 첫 위치 인자가 스위트 이름인 명령은 정해져 있다: `gate run docs`. 플래그로도 받는다.
   // `judge`/`mask` 의 첫 인자는 룰 id 라, 여기서 구별하지 않으면 룰 이름을 스위트로
@@ -161,12 +196,23 @@ async function main(): Promise<number> {
   const suite = resolveSuite(config, suiteName);
   const selection = selectRules(rules, suite, only);
   const selected: RuleSpec[] = selection.targets;
+  const { json, color } = outputMode(suite.config.output);
+  const lang = (flag('lang') as Lang | undefined) ?? suite.config.output?.lang;
+
+  // 스위트가 요구한 룰이 선택에 없으면 그 스위트로는 돌지 않는다. `list`/`suites` 는
+  // 진단용이라 통과시킨다 — 무엇이 빠졌는지 보려면 그 명령이 필요하다.
+  const runsSelection = cmd === 'run' || cmd === 'prove' || cmd === 'status';
+  if (runsSelection && selection.missing.length) {
+    process.stderr.write(
+      `스위트 ${suite.name} 가 요구한 룰이 선택에 없다: ${selection.missing.join(', ')}\n` +
+        '태그·include 를 확인해라. 빠진 채로 돌리면 이 스위트는 선언보다 약한 보증을 같은 이름으로 낸다.\n',
+    );
+    return EXIT.BLOCKED;
+  }
 
   if (cmd === 'list') {
     if (json) return out(selected.map((r) => ({ id: r.id, lane: r.lane, criterion: r.criterion, source: r.source }))), EXIT.PASS;
-    for (const r of selected) {
-      process.stdout.write(`${r.lane === 'hybrid' ? '◑' : '●'} ${r.id}\n    ${r.criterion}\n    ${r.source ?? ''}\n`);
-    }
+    process.stdout.write(renderList(selected, { color, lang }));
     return EXIT.PASS;
   }
 
@@ -201,15 +247,13 @@ async function main(): Promise<number> {
     for (const r of results) {
       if (r.demonstratesRed) verdicts.markProvenRed(proveDir, r.rule, 'prove');
     }
-    if (json) {
-      out(results);
-    } else {
-      for (const r of results) {
-        process.stdout.write(`${r.ok ? '✓' : '✗'} ${r.rule}${r.demonstratesRed ? '' : '  (red 미시연 — unproven)'}\n`);
-        for (const c of r.cases) {
-          if (!c.ok) process.stdout.write(`    ✗ ${c.name}: ${c.expect} 기대, ${c.got} 나옴 ${c.detail ?? ''}\n`);
-        }
-      }
+    if (json) out(results);
+    else process.stdout.write(renderProve(results, { color, lang }));
+    // 빈 배열의 `every` 는 참이다 — 아무것도 증명하지 않은 것이 전부 증명한 것으로
+    // 읽히지 않게, 선택이 비었으면 `run` 과 같은 규칙으로 막는다.
+    if (!results.length && !suite.config.coverage.allowEmpty) {
+      process.stderr.write('고른 게이트가 0개다. 아무것도 증명하지 않은 실행은 통과가 아니다.\n');
+      return EXIT.BLOCKED;
     }
     return results.every((r) => r.ok) ? EXIT.PASS : EXIT.FAIL;
   }
@@ -227,13 +271,14 @@ async function main(): Promise<number> {
         renderRun(result, selected, {
           cwd,
           storeDir: storeDirOf(cwd, suite.config),
-          lang: (flag('lang') as Lang | undefined) ?? suite.config.output?.lang,
+          lang,
           verbose: has('verbose') || suite.config.output?.verbose === true,
           projectContext: suite.config.judge?.projectContext === true,
           inlineJudge: suite.config.judge?.delegate === 'inline',
           failAt: suite.config.failAt,
           suite: suite.name === ALL_SUITE ? undefined : suite.name,
           unclassified: selection.unclassified.map((r) => r.id),
+          color,
         }),
       );
     }
@@ -339,7 +384,7 @@ async function main(): Promise<number> {
 
   if (cmd === 'status') {
     const dir = storeDirOf(cwd, config);
-    const rows = selected.map((r) => {
+    const rows: StatusRow[] = selected.map((r) => {
       const v = verdicts.load(dir, r.id);
       const provenRed = verdicts.hasProvenRed(dir, r.id);
       return {
@@ -354,8 +399,15 @@ async function main(): Promise<number> {
       };
     });
     if (json) out(rows);
-    else for (const r of rows) process.stdout.write(`${STATE_MARK[r.state] ?? '?'} ${r.state.padEnd(9)} ${r.id}\n`);
-    return rows.some((r) => r.state === 'red') ? EXIT.FAIL : EXIT.PASS;
+    else process.stdout.write(renderStatus(rows, { color, lang }));
+    // `run` 과 같은 계약이다. 상태만 읽는 명령이 실행 명령과 다른 종료 코드를 내면
+    // 호스트는 둘 중 하나를 골라 믿어야 한다.
+    if (rows.some((r) => r.state === 'red')) return EXIT.FAIL;
+    if (!rows.length && !suite.config.coverage.allowEmpty) return EXIT.BLOCKED;
+    const notConclusive = rows.some(
+      (r) => r.state === 'stale' || r.state === 'broken' || (r.state === 'unproven' && suite.config.coverage.requireProven),
+    );
+    return notConclusive ? EXIT.BLOCKED : EXIT.PASS;
   }
 
   process.stderr.write(`알 수 없는 명령: ${cmd}\n`);
@@ -365,6 +417,10 @@ async function main(): Promise<number> {
 main().then(
   (code) => process.exit(code),
   (e: unknown) => {
+    if (e instanceof UsageError) {
+      process.stderr.write(`${e.message}\n`);
+      process.exit(EXIT.USAGE);
+    }
     process.stderr.write(`${(e as Error).stack ?? String(e)}\n`);
     process.exit(EXIT.BLOCKED);
   },
