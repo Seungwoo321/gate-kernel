@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.3.0](https://github.com/Seungwoo321/gate-kernel/compare/v0.3.0-beta.0...v0.3.0) (2026-09-10)
+
 ## [0.3.0-beta.0](https://github.com/Seungwoo321/gate-kernel/compare/v0.2.1-beta.1...v0.3.0-beta.0) (2026-09-10)
 
 ### Features
