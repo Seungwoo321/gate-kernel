@@ -35,6 +35,6 @@
   },
   "hooks": {
     "before:init": ["pnpm build"],
-    "after:bump": ["pnpm build"]
+    "after:bump": ["pnpm build", "node scripts/sync-plugin-version.mjs"]
   }
 }
