@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0-beta.0](https://github.com/Seungwoo321/gate-kernel/compare/v0.2.1-beta.1...v0.3.0-beta.0) (2026-09-10)
+
+### Features
+
+* **kernel:** run-level coverage, declared rules, in-process reload, color output ([e6f3304](https://github.com/Seungwoo321/gate-kernel/commit/e6f3304e8aaf8d027279bd5e73e353094b4803b2)), closes [#3](https://github.com/Seungwoo321/gate-kernel/issues/3) [#4](https://github.com/Seungwoo321/gate-kernel/issues/4) [#5](https://github.com/Seungwoo321/gate-kernel/issues/5) [#2](https://github.com/Seungwoo321/gate-kernel/issues/2) [#2](https://github.com/Seungwoo321/gate-kernel/issues/2) [#3](https://github.com/Seungwoo321/gate-kernel/issues/3) [#4](https://github.com/Seungwoo321/gate-kernel/issues/4) [#5](https://github.com/Seungwoo321/gate-kernel/issues/5)
+
+### Documentation
+
+* describe coverage, declared rules, reload, and color contracts ([52bb200](https://github.com/Seungwoo321/gate-kernel/commit/52bb20028902d1fcacab06f7bbf38551729bdfb9))
+
+## [0.2.1-beta.1](https://github.com/Seungwoo321/gate-kernel/compare/v0.2.1-beta.0...v0.2.1-beta.1) (2026-09-10)
+
+## [0.2.1-beta.0](https://github.com/Seungwoo321/gate-kernel/compare/v0.2.0...v0.2.1-beta.0) (2026-09-10)
+
 ## 0.2.0 (2026-09-10)
 
 ### Features

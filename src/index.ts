@@ -10,7 +10,7 @@
 export { rule, RuleDefinitionError, isRuleSpec } from './rule.ts';
 export { subject, tree, diff, pair, command, external, rules } from './subject.ts';
 export { defineConfig, resolveConfig, mergeConfig, DEFAULT_CONFIG } from './config.ts';
-export type { GateConfig, SuiteDef, JudgeOptions, OutputOptions, ResolvedConfig, ExternalProvider } from './config.ts';
+export type { GateConfig, SuiteDef, JudgeOptions, OutputOptions, CoverageOptions, ColorMode, ResolvedConfig, ExternalProvider } from './config.ts';
 export { SEVERITY_RANK } from './types.ts';
 export type {
   Severity,
@@ -31,4 +31,6 @@ export type {
   GateState,
   Verdict,
   RunOutcome,
+  Coverage,
+  CoverageGap,
 } from './types.ts';

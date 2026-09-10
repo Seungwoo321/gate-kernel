@@ -15,3 +15,13 @@ npx gate status --json
 - `broken` — 판정 불가. 집계에서 제외되며, 통과로 세면 안 된다.
 
 `unproven` 이나 `stale` 이 있으면 그것을 해소하는 다음 행동까지 제안한다.
+
+종료 코드는 `gate run` 과 같은 계약이다:
+
+- `1` — `red` 가 있다.
+- `3` — `unproven`/`stale`/`broken` 이 있거나 행이 0개다. 통과가 아니다. 설정의
+  `coverage.allowEmpty` / `coverage.requireProven` 으로 푼 경우에만 예외다.
+- `0` — 그 외.
+
+파싱하는 것은 `--json` 출력이다. `--color always` 는 사람이 보는 터미널용이고, JSON 에는
+색이 섞이지 않는다.

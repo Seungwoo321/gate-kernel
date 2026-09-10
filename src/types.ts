@@ -186,8 +186,8 @@ export interface JudgeSpec {
 
 /**
  * 룰이 실제로 red 를 낼 수 있음을 보이는 픽스처.
- * 등록 시 `expect: 'red'` 케이스가 최소 1개 없으면 거부한다 — 한 번도 실패를
- * 보여준 적 없는 게이트는 통과를 증명하지 못한다(`broken` 상태의 기계적 방지).
+ * `expect: 'red'` 케이스가 없으면 룰은 `unproven` 으로 등록되고, 그 룰이 든 실행은
+ * `blocked` 다 — 한 번도 실패를 보여준 적 없는 게이트는 통과를 증명하지 못한다.
  */
 export interface ProveCase {
   name: string;
@@ -354,14 +354,46 @@ export interface Verdict {
   at: string;
 }
 
+/**
+ * 실행 단위 커버리지. 룰 단위 상태(`GateState`)와 별개의 축이다 — 룰마다 정직한
+ * 상태를 달아도, "몇 개를 돌리기로 했고 그중 몇 개가 실제 증거를 냈는가" 를 집계가
+ * 모르면 `verdicts: []` 와 `outcome: pass` 가 나란히 서고 exit 0 이 된다. 결함 0 건과
+ * 검사 안 함이 exit code 경계에서 다시 구별되지 않는 것을 이 구조가 막는다.
+ */
+export interface Coverage {
+  /** 이번 실행에 고른 룰 수. 스위트·`--rule` 로 좁힌 뒤의 값이다. */
+  selected: number;
+  /** `skipped` 를 뺀, 실제로 판정을 낸 룰 수. */
+  executed: number;
+  /** `green` — 결함 0 건이면서 red 를 시연한 적 있는 룰 수. 실효 증거는 이것뿐이다. */
+  green: number;
+  /** red 를 시연한 적 없어 결함 0 건이 증거가 되지 못한 룰. */
+  unproven: string[];
+  /** 사유를 대고 안 돈 룰. */
+  skipped: string[];
+  /** 커버리지 때문에 `blocked` 가 됐다면 그 사유. 비어 있으면 커버리지는 통과를 막지 않았다. */
+  gaps: CoverageGap[];
+}
+
+/**
+ * - `empty-selection` : 고른 룰이 0 개다. 아무것도 검사하지 않은 실행은 통과가 아니다.
+ * - `unproven`        : 결함 0 건이지만 red 를 시연한 적 없는 룰이 있다.
+ */
+export type CoverageGap = 'empty-selection' | 'unproven';
+
 export interface RunOutcome {
   verdicts: Verdict[];
-  /** 집계 결과. `broken` 은 제외되고 `stale` 은 통과가 아니다. */
+  /**
+   * 집계 결과. `broken` 은 제외되고 `stale` 은 통과가 아니다. `unproven` 과 빈 선택은
+   * `blocked` 다 — 통과와 검사 안 함이 같은 종료 코드를 내면 오케스트레이터는 둘을
+   * 구별할 수 없다.
+   */
   outcome: 'pass' | 'fail' | 'blocked';
   /** 심각도별 결함 수(집계 대상만). */
   counts: Record<Severity, number>;
   /** 판정하지 못한 룰 — fail-closed 의 근거. */
   unjudged: string[];
+  coverage: Coverage;
   startedAt: string;
   finishedAt: string;
 }
